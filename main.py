@@ -19,7 +19,7 @@ import torch.nn.functional as F
 import numpy as np
 import time
 import re
-#from utils.flowlib import flow_to_image
+from utils.flowlib import flow_to_image
 from utils import logger
 from torchsummary import summary
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -30,13 +30,10 @@ from utils.multiscaleloss import MultiscaleLoss, realEPE, RMSE
 from glob import glob
 import cv2 as cv
 from tqdm import tqdm
+from eval import eval
+from eval import eval_with_epe
+import wandb
 
-
-
-
-from visdom import Visdom
-
-#python -m visdom.server
 def find_NewFile(path):
     # 获取文件夹中的所有文�?
     lists = glob(os.path.join(path, '*.tar'))
@@ -46,7 +43,8 @@ def find_NewFile(path):
     file_new = lists[-1]
     return file_new
 
-parser = argparse.ArgumentParser(description='PSMNet')
+
+parser = argparse.ArgumentParser(description='Casc_LiteFlowNet')
 parser.add_argument('--maxdisp', type=int, default=256,
                     help='maxium disparity, out of range pixels will be masked out. Only affect the coarsest cost volume size')
 parser.add_argument('--fac', type=float, default=1,
@@ -74,41 +72,35 @@ parser.add_argument('--stage', default='chairs',
 parser.add_argument('--ngpus', type=int, default=8,
                     help='number of gpus to use.')
 args = parser.parse_args()
-#python -m visdom.server
-baselr = 1e-5  #0.00001/2=0.000005=5e-6
-batch_size = 1
 
+baselr = 1e-5  #0.00001/2=0.000005=5e-6
+batch_size = 8
 
 torch.cuda.set_device(0)
 
-dataset = MyDataset('D:\desktop\连续流场数据集\datasets',
+dataset = MyDataset('/home/france/Documents/uniform/train',
                     transform=Augmentation(size=256, mean=(128)))
 
-from lite_flownet import liteflownet #基础模型
+test_dataset = MyDataset('/home/france/Documents/uniform/test',
+                         transform=Basetransform(size=256, mean=(128)))
+
 print('%d batches per epoch' % (len(dataset) // batch_size))
-from casc_flownet_en_3layer import casc_liteflownet as casc_en_3layer
-from casc_flownet_en_4layer import casc_liteflownet as casc_en_4layer
+from lite_flownet import liteflownet
+from casc_flownet_4layer import casc_liteflownet as casc_en_4layer
+from casc_flownet_5layer import casc_liteflownet as casc_en_5layer
+
 model=liteflownet(args.or_resume)
-#casc_model = casc_1(args.casc_resume)
 casc_model=casc_en_4layer(args.casc_resume)
-#python -m visdom.server
 model.cuda()
 casc_model.cuda()
-#summary(model, input_size=(3, 3, 256, 256))
-#optimizer = optim.Adam(filter(lambda p:p.requires_grad, casc_model.parameters()), lr=baselr, betas=(0.9, 0.999), amsgrad=False)
-optimizer = optim.Adam(casc_model.parameters(), lr=baselr, betas=(0.9, 0.999), amsgrad=False)
-#optimizer_or = optim.Adam(model.parameters(), lr=baselr, betas=(0.9, 0.999), amsgrad=False)
-# optimizer = optim.SGD(model.parameters(), lr=baselr, momentum=0.9,  weight_decay=5e-4)
+summary(model, input_size=(3, 3, 256, 256))
 
+optimizer = optim.Adam(casc_model.parameters(), lr=baselr, betas=(0.9, 0.999), amsgrad=False)
+# optimizer = optim.SGD(model.parameters(), lr=baselr, momentum=0.9,  weight_decay=5e-4)
 criterion = MultiscaleLoss()
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5, verbose=True,min_lr=1e-8)
-#scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 5, eta_min=5e-8)
-
-#TestImgLoader = torch.utils.data.DataLoader(test_dataset, batch_size=10, shuffle=True, num_workers=2,
-                       #                     drop_last=True, pin_memory=True)
-
-
-
+TestImgLoader = torch.utils.data.DataLoader(test_dataset, batch_size=12, shuffle=True, num_workers=2,
+                                            drop_last=True, pin_memory=True)
 
 def train(imgL, imgR, flowl0):
     casc_model.train()
@@ -131,6 +123,7 @@ def train(imgL, imgR, flowl0):
     mean_loss=total_loss/6
     mean_loss.backward()
     optimizer.step()
+
     vis = {}
     mean_RMSE=0
     for out1,label in zip(outs,flowl0):
@@ -141,28 +134,26 @@ def train(imgL, imgR, flowl0):
 
 def main():
     TrainImgLoader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2,
-                                                 drop_last=True,pin_memory=True)
-
+                                                 drop_last=True, pin_memory=True)
+    log = logger.Logger(args.savemodel, name=args.logname)
 
     start_full_time = time.time()
     start_epoch = 1 if args.casc_resume is None else int(re.findall('(\d+)', args.casc_resume)[0]) + 1
-
-    viz_1 = Visdom()
-
-    viz_1.line([[0., 0., 0.]], [start_epoch], win='train',
-               opts=dict(title='train_loss&test_loss', legend=['mean_rmse', 'first_rmse', 'learn_rate*1e5']))
+    total_iters = 0
+    
+    wandb.watch(model)
+    
     for epoch in range(start_epoch, args.epochs + 1):
         total_train_loss = 0
         total_train_rmse = 0
         total_first_rmse=0
         # training loop
-        total_iters = 0
         for batch_idx, (imgL_crop, imgR_crop,flow0) in enumerate(TrainImgLoader):
             start_time = time.time()
             loss, vis,rmse_1 = train(imgL_crop, imgR_crop, flow0)
             if (total_iters) % 50 == 0:
-                print('Epoch %d Iter %d/%d mean_RMSE = %.3f   first_RMSE = %.3f ,  , time = %.2f， learn rate*1e5=%.8f' % (epoch,
-                                                                                             batch_idx,len(TrainImgLoader),
+                print('Epoch %d Iter %d/%d training loss = %.3f , RMSE = %.3f   first_RMSE = %.3f ,  , time = %.2f， learn rate*1e5=%.8f' % (epoch,
+                                                                                             batch_idx,len(TrainImgLoader),loss,
                                                                                              vis['mean_RMSE'],
                                                                                             rmse_1,
                                                                                              time.time() - start_time,
@@ -172,31 +163,40 @@ def main():
             total_train_rmse += vis['mean_RMSE']
             learn_rate = scheduler.optimizer.param_groups[0]['lr']
             total_iters += 1
-        #scheduler.step(epoch)
-
-        print('Epoch {}, Mean train_rmse = {:.4f}  Mean_first_rmse = {:.4f}'.format(epoch, total_train_rmse / total_iters, total_first_rmse/total_iters ))
-        learn_rate = scheduler.optimizer.param_groups[0]['lr']
-        learn_show = learn_rate * 100000
-        mean_rmse=total_train_rmse / total_iters
-        first_rms=total_first_rmse/total_iters
-        scheduler.step(mean_rmse)
-        if epoch %3==0:
-            casc_filename=args.savemodel + '/' + args.casc_logname + '/finetune_' + str(epoch) + '.tar'
-            casc_save_dict=casc_model.state_dict()
-            casc_save_dict=collections.OrderedDict(
-                {k: v for k, v in casc_save_dict.items() if ('flow_reg' not in k or 'conv1' in k) and ('grid' not in k)})
-            torch.save(
-                {'epoch': epoch, 'state_dict': casc_save_dict, 'mean_rmse_loss': mean_rmse,'vis':vis },
-                casc_filename)
-
-        viz_1.line([[mean_rmse.detach().cpu().numpy(), first_rms.detach().cpu().numpy(), learn_show]], [epoch], win='train', update='append')
-
-
-    torch.cuda.empty_cache()
+        savefilename = args.savemodel + '/' + args.casc_logname + '/casc_finetune_' + str(epoch) + '.tar'
+        save_dict = model.state_dict()
+        save_dict = collections.OrderedDict(
+            {k: v for k, v in save_dict.items() if ('flow_reg' not in k or 'conv1' in k) and ('grid' not in k)})
+        torch.save(
+            {'epoch': epoch, 'state_dict': save_dict, 'train_loss': total_train_loss / len(TrainImgLoader), },
+            savefilename)
+        
+        
+        test_rmsef,test_epe= eval_with_epe(model, TestImgLoader)
+        train_rmsef,train_epe= eval_with_epe(model, TrainImgLoader)
+        
+        wandb.log({"Train loss":total_train_loss / len(TrainImgLoader),
+        	"Test rmse":test_rmsef,
+        	"Train rmse":train_rmsef,
+        	"Learning rate": optimizer.param_groups[0]['lr'],
+        	"Test EPE":test_epe,
+        	"Train EPE":train_epe})
+           
+        log.scalar_summary('train/loss', total_train_loss / len(TrainImgLoader), epoch)
+        log.scalar_summary('train/RMSE', total_train_rmse / len(TrainImgLoader), epoch)
+        log.scalar_summary('test/RMSE', test_rmsef, epoch)
+        log.scalar_summary('train/learning rate', optimizer.param_groups[0]['lr'], epoch)
+        scheduler.step(total_train_loss / len(TrainImgLoader))
+    
+	torch.cuda.empty_cache()
 
 
     print('full finetune time = %.2f HR' % ((time.time() - start_full_time) / 3600))
+    torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model.pt'))
 
-
-if __name__ == '__main__':
+if __name__ == '__main__':    
+    wandb.init(project="roya",
+               name="casc_liteflownet_roya",
+               resume=True,
+               id="9")
     main()
