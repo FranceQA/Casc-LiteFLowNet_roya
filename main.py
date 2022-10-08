@@ -23,7 +23,7 @@ from utils.flowlib import flow_to_image
 from utils import logger
 from torchsummary import summary
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from utils.dataloader import MyDataset
+from utils.dataloader import MyDataset, MyDataset_roya
 from utils.augmentations import Augmentation, Basetransform
 torch.backends.cudnn.benchmark = True
 from utils.multiscaleloss import MultiscaleLoss, realEPE, RMSE
@@ -55,13 +55,13 @@ parser.add_argument('--casc_logname', default='logname_casc_en_four_layer',
                     help='name of the log file')
 parser.add_argument('--database', default='/',
                     help='path to the database')
-parser.add_argument('--epochs', type=int, default=1500,
+parser.add_argument('--epochs', type=int, default=500,
                     help='number of epochs to train')
 parser.add_argument('--loadmodel', default=None,
                     help='path of the pre-trained model')
-parser.add_argument('--savemodel', default='./',
+parser.add_argument('--savemodel', default='/home/fquesada/modelos/CLFN_newflo',
                     help='path to save the model')
-parser.add_argument('--or_resume', default='D:\desktop\Lite-Flownet-master\logname_old\\finetune_1272.tar',  #在此加载基础模型
+parser.add_argument('--or_resume', default=None,
                     help='whether to reset moving mean / other hyperparameters')
 #parser.add_argument('--casc_resume',default=None)
 parser.add_argument('--casc_resume',default='D:\desktop\TCN-flownet\程序\Casc-LiteFlownet\\logname_casc_four_layer\\finetune_57.tar')
@@ -78,13 +78,13 @@ batch_size = 8
 
 torch.cuda.set_device(0)
 
-dataset = MyDataset('/home/france/Documents/uniform/train',
+dataset = MyDataset_roya('/home/fquesada/Documents/esporas_max/roya_dataset_1/training',
                     transform=Augmentation(size=256, mean=(128)))
-
-test_dataset = MyDataset('/home/france/Documents/uniform/test',
+test_dataset = MyDataset_roya('/home/fquesada/Documents/esporas_max/roya_dataset_1/validate',
                          transform=Basetransform(size=256, mean=(128)))
 
 print('%d batches per epoch' % (len(dataset) // batch_size))
+
 from lite_flownet import liteflownet
 from casc_flownet_4layer import casc_liteflownet as casc_en_4layer
 from casc_flownet_5layer import casc_liteflownet as casc_en_5layer
@@ -99,7 +99,7 @@ optimizer = optim.Adam(casc_model.parameters(), lr=baselr, betas=(0.9, 0.999), a
 # optimizer = optim.SGD(model.parameters(), lr=baselr, momentum=0.9,  weight_decay=5e-4)
 criterion = MultiscaleLoss()
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5, verbose=True,min_lr=1e-8)
-TestImgLoader = torch.utils.data.DataLoader(test_dataset, batch_size=12, shuffle=True, num_workers=2,
+TestImgLoader = torch.utils.data.DataLoader(test_dataset, batch_size=12, shuffle=True, num_workers=12,
                                             drop_last=True, pin_memory=True)
 
 def train(imgL, imgR, flowl0):
@@ -195,8 +195,8 @@ def main():
     torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model.pt'))
 
 if __name__ == '__main__':    
-    wandb.init(project="roya",
+    wandb.init(project="proyecto_roya_CLFN",
                name="casc_liteflownet_roya",
                resume=True,
-               id="9")
+               id="0")
     main()

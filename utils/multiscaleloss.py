@@ -64,7 +64,7 @@ def multiscaleEPE(network_output, target_flow, weights=(0.005,0.005,0.005,0.01, 
     def one_scale(output, target):
         b, _, h, w = output.size()
         target_scaled = F.interpolate(target, (h, w), mode='area')
-        return EPE(output, target_scaled, mean=False)
+        return EPE(output, target_scaled, mean=True)
     if type(network_output) not in [tuple, list]:
         network_output = [network_output]
     assert (len(weights) == len(network_output))

@@ -9,7 +9,7 @@ import torch
 from torch.autograd import Variable
 from utils.multiscaleloss import realEPE,RMSE
 from tqdm import tqdm
-from utils.dataloader import MyDataset
+from utils.dataloader import MyDataset,MyDataset_roya
 from utils.augmentations import Basetransform
 from utils.flowlib import *
 import torch.nn.functional as F
