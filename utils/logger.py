@@ -42,7 +42,7 @@ class Logger(object):
                         value=value.cpu()
                       except:
                         pass
-                      tf.summary.scalar(tag, value,step)
+                      tf.summary.scalar(tag, value.detach().numpy(),step)
                       self.writer.flush()
 
     def image_summary(self, tag, images, step):

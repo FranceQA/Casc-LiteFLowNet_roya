@@ -60,7 +60,7 @@ def RMSE(input_flow, target_flow):
     return torch.sqrt((target_flow - input_flow).pow(2).mean())
 
 
-def multiscaleEPE(network_output, target_flow, weights=(0.005,0.005,0.005,0.01, 0.01, 0.02, 0.02, 0.04, 0.08, 0.32)):
+def multiscaleEPE(network_output, target_flow, weights=(0.01, 0.02, 0.08, 0.32)):
     def one_scale(output, target):
         b, _, h, w = output.size()
         target_scaled = F.interpolate(target, (h, w), mode='area')
@@ -79,6 +79,20 @@ def realEPE(output, target, sparse=False):
     upsampled_output = F.interpolate(output, (h, w), mode='bilinear', align_corners=False)
     return EPE(upsampled_output, target, mean=True)
 
+def filtered_aee(output, target, sparse=False):
+    b, _, h, w = target.size()
+    upsampled_output = F.interpolate(output, (h, w), mode='bilinear', align_corners=False)
+    aee=EPE(upsampled_output, target, mean=True)
+
+    ##
+    ups2=upsampled_output.cpu()
+    tar=target.cpu()
+    ups2=torch.hypot(ups2[:,0,:,:],ups2[:,1,:,:])
+    tar = torch.hypot(tar[:,0,:,:],tar[:,1,:,:])
+    arguments = torch.argwhere(torch.add(ups2,tar)>2)            #1*2 = threshold
+    faee=EPE(ups2[arguments[:,0],arguments[:,1],arguments[:,2]], tar[arguments[:,0],arguments[:,1],arguments[:,2]], mean=True)
+    metrics={'aee':aee,'faee':faee}
+    return metrics
 
 class MultiscaleLoss(nn.Module):
     def __init__(self):
